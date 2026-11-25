@@ -11,6 +11,8 @@ Usage:
 
 import sys
 
+import integrity  # parity byte + checksum (error detection)
+
 MAGIC = b"RLE"  # first 3 bytes of every RLE file, so we can recognise it
 MAX_RUN = 255   # the count is stored in 1 byte, so a run can be at most 255 long
 
@@ -47,6 +49,7 @@ def compress(input_path, output_path):
         data = f.read()
     with open(output_path, "wb") as out:
         out.write(MAGIC)
+        out.write(integrity.make_check(data))  # 5 bytes: parity + checksum of the original
         out.write(rle_encode(data))
 
 
@@ -55,8 +58,17 @@ def decompress(input_path, output_path):
         data = f.read()
     if data[:3] != MAGIC:
         raise ValueError("Not a .rle file")
+    stored_check = data[3:3 + integrity.CHECK_SIZE]
+
+    try:
+        restored = rle_decode(data[3 + integrity.CHECK_SIZE:])
+    except ValueError:
+        raise ValueError("File is corrupted: could not decode it")
+
+    integrity.verify(restored, stored_check)  # stops here if the data was damaged
+
     with open(output_path, "wb") as out:
-        out.write(rle_decode(data[3:]))
+        out.write(restored)
 
 
 if __name__ == "__main__":

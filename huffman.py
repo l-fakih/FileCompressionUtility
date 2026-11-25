@@ -9,6 +9,8 @@ Usage:
 import heapq
 import sys
 
+import integrity  # parity byte + checksum (error detection)
+
 MAGIC = b"HUF"  # first 3 bytes of every compressed file, so we can recognise it
 
 
@@ -103,6 +105,7 @@ def compress(input_path, output_path):
 
     with open(output_path, "wb") as out:
         out.write(MAGIC)
+        out.write(integrity.make_check(data))  # 5 bytes: parity + checksum of the original
         # Header: the frequency table, so the decompressor can rebuild the same tree.
         out.write(len(freq).to_bytes(2, "big"))          # number of distinct bytes (0-256)
         for symbol in sorted(freq):
@@ -130,7 +133,23 @@ def decompress(input_path, output_path):
 
     if data[:3] != MAGIC:
         raise ValueError("Not a .huf file")
-    pos = 3
+    stored_check = data[3:3 + integrity.CHECK_SIZE]
+
+    try:
+        out = decode(data[3 + integrity.CHECK_SIZE:])
+    except (IndexError, ValueError):
+        # A damaged header can make us read past the end of the file.
+        raise ValueError("File is corrupted: could not decode it")
+
+    integrity.verify(out, stored_check)  # stops here if the data was damaged
+
+    with open(output_path, "wb") as f:
+        f.write(out)
+
+
+def decode(data):
+    """Turn the part after the check bytes back into the original bytes."""
+    pos = 0
 
     # Read the frequency table back.
     count = int.from_bytes(data[pos:pos + 2], "big")
@@ -145,8 +164,7 @@ def decompress(input_path, output_path):
     pos += 1
 
     if not freq:  # it was an empty file
-        open(output_path, "wb").close()
-        return
+        return b""
 
     root = build_tree(freq)  # same table + same rules = exactly the same tree
     total = sum(freq.values())  # how many bytes the original file had
@@ -166,8 +184,7 @@ def decompress(input_path, output_path):
                 out.append(node.symbol)
                 node = root                                 # start again from the top
 
-    with open(output_path, "wb") as f:
-        f.write(out)
+    return bytes(out)
 
 
 # ---------------------------------------------------------------------------
